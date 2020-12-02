@@ -1,21 +1,22 @@
-pragma solidity ^0.4.10;
+ragma solidity ^0.4.10;
 
+import "./rlp.sol";
 
 //provide liquidity xy=20 which mintToSell one xyToken at the first time.
-contract xyToken {
+contract xyToken is Rlp{
     
-    address public AMM_address;
+    //address public AMM_address;
     
     constructor() public payable {
-        AMM_address = msg.sender;
-        uint256 ethReserve = AMM_address.balance;
+        address(this).transfer(1000000000);
+        //AMM_address = address(this);
+        uint256 ethReserve = address(this).balance;
         //require(ethReserve > 10);
         _poolTotalSupply += ethReserve;
         _poolBalances[msg.sender] += ethReserve;
         mint(1);
+        _ownedSupply -= 1;
     }
-    
-    uint256 public ad = AMM_address.balance;
     
     uint8 constant public decimals = 2;
     string constant public name = "xyToken";
@@ -29,6 +30,14 @@ contract xyToken {
     
     function balanceOf() public constant returns (uint256) {
         return balances[msg.sender];
+    }
+    
+    function poolBalanceOf(address account) external view returns (uint256) {
+        return _poolBalances[account];
+    }
+    
+    function poolTotalSupply() external view returns (uint256) {
+        return _poolTotalSupply;
     }
     
     function internalTransfer(address from, address to, uint256 value) internal returns (bool success) {
@@ -53,10 +62,18 @@ contract xyToken {
     ///////////////
     uint256 head;
     uint256 tail;
-    address[] contractAddress;
+    uint256 _ownedSupply;
     
     function totalSupply() public constant returns (uint256 supply){
-        return head - tail;
+        return head - tail - _ownedSupply;
+    }
+    
+    function getOwnedSupply() public constant returns (uint256 supply){
+        return _ownedSupply;
+    }
+    
+    function ethSupply() public constant returns (uint256 supply){
+        return address(this).balance;
     }
     
     
@@ -69,8 +86,8 @@ contract xyToken {
         require(msg.value != 0); // dev: no ether to add
 
         uint256 ethReserve = address(this).balance - msg.value;
-        uint256 tokenReserve = head - tail;
-        uint256 tokenAmount = msg.value * (tokenReserve) / ethReserve + 1;
+        uint256 tokenReserve = head - tail - _ownedSupply;
+        uint256 tokenAmount = msg.value * (tokenReserve) / ethReserve;
         uint256 poolTotalSupply = _poolTotalSupply;
         uint256 liquidityCreated = msg.value * (poolTotalSupply) / ethReserve;
         require(maxTokens >= tokenAmount); // dev: need more tokens
@@ -80,7 +97,9 @@ contract xyToken {
         _poolBalances[msg.sender] += liquidityCreated;
 
         // remove LGTs from sender
+        require(balances[msg.sender] >= tokenAmount);
         balances[msg.sender] = balances[msg.sender] - tokenAmount;
+        _ownedSupply -= tokenAmount;
         return liquidityCreated;
     }
     
@@ -90,16 +109,17 @@ contract xyToken {
     {
         require(amount != 0); // dev: amount of liquidity to remove must be positive
         uint256 totalLiquidity = _poolTotalSupply;
-        uint256 tokenReserve = head - tail;
+        uint256 tokenReserve = head - tail - _ownedSupply;
         uint256 ethAmount = amount * (address(this).balance) / totalLiquidity;
         uint256 tokenAmount = amount * (tokenReserve) / totalLiquidity;
         
         // Remove liquidity shares
-        _poolBalances[msg.sender] = _poolBalances[msg.sender] / (amount);
+        _poolBalances[msg.sender] = _poolBalances[msg.sender] - (amount);
         _poolTotalSupply = totalLiquidity - amount;
 
         // Transfer tokens
         balances[msg.sender] += tokenAmount;
+        _ownedSupply += tokenAmount;
 
         // Transfer ether
         msg.sender.transfer(ethAmount);
@@ -109,10 +129,12 @@ contract xyToken {
     
     
     function makeChild() internal returns (address addr) {
-        address newContract = new createToDestroy();
-        contractAddress.push(newContract);
-        
-        return newContract;
+        assembly{
+            let solidity_free_mem_ptr := mload(0x40)
+            mstore(solidity_free_mem_ptr, 0x000000000000000000000000000000000000000000000000000000007a735B38)
+            mstore(add(solidity_free_mem_ptr, 0x40), 0xDa6a701c568545dCfcB03FcB875f56beddC43318585733ff600052601b600af3)
+            addr := create(0, add(solidity_free_mem_ptr, 2), 31)
+        }
     }
     
     function mint(uint256 value) public {
@@ -122,6 +144,7 @@ contract xyToken {
         
         head += value;
         balances[msg.sender] += value;
+        _ownedSupply += value;
     }
     
     function getInputPrice(uint256 inputAmount, uint256 inputReserve, uint256 outputReserve)
@@ -152,7 +175,7 @@ contract xyToken {
         
         //IDK if there is vulnerability
         //Liquidity pool will send ether to msg.sender acoount
-        uint256 etherEarned = getInputPrice(amount, head - tail, AMM_address.balance);
+        uint256 etherEarned = getInputPrice(amount, head - tail - _ownedSupply, address(this).balance);
         head += amount;
         msg.sender.transfer(etherEarned);
         
@@ -162,7 +185,7 @@ contract xyToken {
     function destroyChildren(uint256 value) internal {
         uint256 tmp_tail = tail;
         for (uint256 i=tmp_tail; i<=tmp_tail+value; i++){
-            address(contractAddress[i]).call.value(0 wei);
+            mk_contract_address(this, i).call();
         }
         tail = tmp_tail + value;
     }
@@ -176,6 +199,7 @@ contract xyToken {
         destroyChildren(value);
         
         balances[msg.sender] = account_balance - value;
+        _ownedSupply -= value;
         
         return true;
     }
@@ -187,7 +211,7 @@ contract xyToken {
             return 0;
         }
         
-        uint256 etherPaid = getOutputPrice(amount, AMM_address.balance, head - tail);
+        uint256 etherPaid = getOutputPrice(amount, address(this).balance, head - tail - _ownedSupply);
         
         //need pay enough money
         if (msg.value < etherPaid){
@@ -203,10 +227,3 @@ contract xyToken {
     }
     
 } 
-
-
-contract createToDestroy {
-    function destroy() external {
-        selfdestruct(msg.sender);
-    }
-}
